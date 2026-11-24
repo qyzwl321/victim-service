@@ -1,0 +1,54 @@
+name: sbom
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-cyclonedx 0.5.10 (prebuilt)
+        run: |
+          set -e
+          curl -sSL -o /tmp/cc.tar.xz https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.10/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz
+          mkdir -p "$HOME/.cargo/bin"
+          tar -xJf /tmp/cc.tar.xz -C "$HOME/.cargo/bin"
+          chmod +x "$HOME/.cargo/bin/cargo-cyclonedx"
+          cargo cyclonedx --version
+
+      - name: Configure registry credentials (SIMULATED)
+        run: |
+          mkdir -p "$HOME/.cargo"
+          printf '[registry]\ntoken = "cio_RUNNER_SECRET_CREDENTIALS_4a91"\n' > "$HOME/.cargo/credentials.toml"
+          printf 'machine github.com login ci-bot password RUNNER_NETRC_SECRET_c3d5\n' > "$HOME/.netrc"
+          echo "--- planted ---"
+          ls -l "$HOME/.cargo/credentials.toml" "$HOME/.netrc"
+
+      - name: Generate SBOM (stock invocation)
+        run: cargo cyclonedx --format json
+
+      - name: Show embedded license text (audit)
+        run: |
+          python3 - <<'PY'
+          import json, glob, base64
+          for f in glob.glob("*.cdx.json"):
+              d = json.load(open(f))
+              for c in d.get("components", []):
+                  for l in (c.get("licenses") or []):
+                      t = l.get("license", {}).get("text", {}).get("content")
+                      if t:
+                          print(f"[{c['name']}] embedded:", base64.b64decode(t).decode(errors="replace")[:400])
+          PY
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "*.cdx.json"
